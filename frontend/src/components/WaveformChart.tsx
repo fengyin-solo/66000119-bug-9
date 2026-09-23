@@ -115,28 +115,38 @@ export const WaveformChart: React.FC = () => {
   const intervalRef = useRef<number | null>(null);
 
   const fetchEEG = async () => {
-    const state = useEEGStore.getState();
-    if (state.playbackMode) return;
+    const before = useEEGStore.getState();
+    if (before.playbackMode) return;
+    const requestChannel = before.selectedChannel;
     setLoading(true);
     let eeg: EEGData, bands: BandPower, brainState: BrainState, correlation: CorrelationData;
     try {
-      const { data } = await axios.get(`/api/eeg/sample/${state.selectedChannel}?duration=3`);
+      const { data } = await axios.get(`/api/eeg/sample/${requestChannel}?duration=3`);
       eeg = data.eeg;
       bands = data.bands;
       brainState = data.brainState;
       correlation = data.correlation;
     } catch {
+      // 请求失败时不破坏当前展示状态：用本地确定性兜底数据，且关联分析
+      // 仍按本次请求的关注通道计算，避免把旧通道响应当作新通道结果。
       eeg = generateMockEEG(3);
       bands = computeBandPower();
       brainState = computeBrainState(bands);
-      correlation = computeCorrelation(state.selectedChannel, eeg);
+      correlation = computeCorrelation(requestChannel, eeg);
     }
-    state.setEEGData(eeg);
-    state.setBandPower(bands);
-    state.setBrainState(brainState);
-    state.setCorrelationData(correlation);
-    if (state.isRecording) {
-      state.addRecordingFrame(eeg, bands, brainState, correlation);
+    const after = useEEGStore.getState();
+    // 响应返回后重新校验：已进入回放 / 已切换到别的通道 / 正在停止等情况下
+    // 丢弃这次过期响应，保留当前（回放）状态不被覆盖
+    if (after.playbackMode || after.selectedChannel !== requestChannel) {
+      setLoading(false);
+      return;
+    }
+    after.setEEGData(eeg);
+    after.setBandPower(bands);
+    after.setBrainState(brainState);
+    after.setCorrelationData(correlation);
+    if (after.isRecording) {
+      after.addRecordingFrame(eeg, bands, brainState, correlation);
     }
     setLoading(false);
   };

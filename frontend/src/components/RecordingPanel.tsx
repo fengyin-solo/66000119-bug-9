@@ -40,6 +40,9 @@ export const RecordingPanel: React.FC = () => {
     togglePlayback,
     setPlaybackPlaying,
     selectedChannel,
+    brainState,
+    bandPower,
+    correlationData,
   } = useEEGStore();
 
   const [recordingName, setRecordingName] = useState('');
@@ -47,6 +50,10 @@ export const RecordingPanel: React.FC = () => {
   const [elapsedTime, setElapsedTime] = useState(0);
   const timerRef = useRef<number | null>(null);
   const playbackTimerRef = useRef<number | null>(null);
+  // 播放锚点：anchorTime 为锚点时刻的回放时间，anchorWall 为对应的墙钟时间。
+  // tick 时按墙钟差推进，暂停 / 跳转只重设锚点，保证恢复播放从正确帧继续、
+  // 连续跳转与播放推进共用同一条时间线。
+  const anchorRef = useRef<{ time: number; wall: number } | null>(null);
 
   useEffect(() => {
     if (isRecording) {
@@ -67,15 +74,23 @@ export const RecordingPanel: React.FC = () => {
 
   useEffect(() => {
     if (playbackState.isPlaying && activeRecording) {
+      anchorRef.current = {
+        time: useEEGStore.getState().playbackState.currentTime,
+        wall: performance.now(),
+      };
       playbackTimerRef.current = window.setInterval(() => {
-        const { playbackState, activeRecording, setPlaybackTime, setPlaybackPlaying } = useEEGStore.getState();
-        if (!activeRecording) return;
-        const newTime = playbackState.currentTime + 0.1;
-        if (newTime >= activeRecording.duration) {
-          setPlaybackTime(activeRecording.duration);
-          setPlaybackPlaying(false);
+        const state = useEEGStore.getState();
+        const rec = state.activeRecording;
+        const anchor = anchorRef.current;
+        if (!rec || !anchor) return;
+        const elapsed = (performance.now() - anchor.wall) / 1000;
+        const newTime = anchor.time + elapsed;
+        if (newTime >= rec.duration) {
+          state.setPlaybackTime(rec.duration);
+          state.setPlaybackPlaying(false);
+          anchorRef.current = null;
         } else {
-          setPlaybackTime(newTime);
+          state.setPlaybackTime(newTime);
         }
       }, 100);
     } else {
@@ -83,6 +98,7 @@ export const RecordingPanel: React.FC = () => {
         clearInterval(playbackTimerRef.current);
         playbackTimerRef.current = null;
       }
+      anchorRef.current = null;
     }
     return () => {
       if (playbackTimerRef.current) clearInterval(playbackTimerRef.current);
@@ -117,9 +133,15 @@ export const RecordingPanel: React.FC = () => {
     enterPlaybackMode(recording);
   };
 
+  const reanchor = (time: number) => {
+    // 跳转后从新位置继续计时，避免播放锚点把时间拽回旧位置
+    anchorRef.current = { time, wall: performance.now() };
+  };
+
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const time = parseFloat(e.target.value);
     setPlaybackTime(time);
+    reanchor(time);
   };
 
   const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -129,6 +151,7 @@ export const RecordingPanel: React.FC = () => {
     const percentage = Math.max(0, Math.min(1, x / rect.width));
     const time = percentage * activeRecording.duration;
     setPlaybackTime(time);
+    reanchor(time);
   };
 
   return (
@@ -320,7 +343,7 @@ export const RecordingPanel: React.FC = () => {
             </span>
           </div>
 
-          {playbackState.currentFrame && (
+          {playbackState.currentFrame && brainState && bandPower && correlationData ? (
             <div>
               <div style={{
                 display: 'flex',
@@ -331,13 +354,13 @@ export const RecordingPanel: React.FC = () => {
                 borderRadius: '6px',
                 marginBottom: '6px',
               }}>
-                <span style={{ fontSize: '11px', color: '#1976d2' }}>专注: {playbackState.currentFrame.brainState.focus.toFixed(0)}</span>
-                <span style={{ fontSize: '11px', color: '#388e3c' }}>放松: {playbackState.currentFrame.brainState.relaxation.toFixed(0)}</span>
-                <span style={{ fontSize: '11px', color: '#d32f2f' }}>疲劳: {playbackState.currentFrame.brainState.fatigue.toFixed(0)}</span>
+                <span style={{ fontSize: '11px', color: '#1976d2' }}>专注: {brainState.focus.toFixed(0)}</span>
+                <span style={{ fontSize: '11px', color: '#388e3c' }}>放松: {brainState.relaxation.toFixed(0)}</span>
+                <span style={{ fontSize: '11px', color: '#d32f2f' }}>疲劳: {brainState.fatigue.toFixed(0)}</span>
                 <span style={{ fontSize: '11px', color: '#666' }}>|</span>
-                <span style={{ fontSize: '11px', color: '#1565c0' }}>α: {playbackState.currentFrame.bands.alpha.toFixed(2)}</span>
-                <span style={{ fontSize: '11px', color: '#e53935' }}>β: {playbackState.currentFrame.bands.beta.toFixed(2)}</span>
-                <span style={{ fontSize: '11px', color: '#2e7d32' }}>θ: {playbackState.currentFrame.bands.theta.toFixed(2)}</span>
+                <span style={{ fontSize: '11px', color: '#1565c0' }}>α: {bandPower.alpha.toFixed(2)}</span>
+                <span style={{ fontSize: '11px', color: '#e53935' }}>β: {bandPower.beta.toFixed(2)}</span>
+                <span style={{ fontSize: '11px', color: '#2e7d32' }}>θ: {bandPower.theta.toFixed(2)}</span>
               </div>
               <div style={{
                 display: 'flex',
@@ -348,8 +371,8 @@ export const RecordingPanel: React.FC = () => {
                 borderRadius: '6px',
               }}>
                 <span style={{ fontSize: '11px', color: '#666', fontWeight: 500 }}>相关度:</span>
-                {playbackState.currentFrame?.correlation.correlations
-                  .filter(c => c.channel !== playbackState.currentFrame?.correlation.targetChannel)
+                {correlationData.correlations
+                  .filter(c => c.channel !== correlationData.targetChannel)
                   .slice(0, 3)
                   .map((c, i) => (
                     <span key={i} style={{ fontSize: '11px', color: '#6a1b9a' }}>
@@ -357,6 +380,16 @@ export const RecordingPanel: React.FC = () => {
                     </span>
                   ))}
               </div>
+            </div>
+          ) : (
+            <div style={{
+              padding: '10px',
+              background: 'rgba(255,255,255,0.5)',
+              borderRadius: '6px',
+              fontSize: '11px',
+              color: '#666',
+            }}>
+              当前时间点 / 通道 {selectedChannel} 无回放帧，已清空评分（不沿用旧通道数据）
             </div>
           )}
         </div>

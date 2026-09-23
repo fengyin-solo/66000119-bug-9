@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { EEGData, BandPower, BrainState, CorrelationData, Recording, RecordingFrame, PlaybackState } from '../types';
+import { deriveView, resolveFrameAt } from '../utils/playback';
 
 const STORAGE_KEY = 'eeg_recordings';
 
@@ -21,6 +22,7 @@ const saveRecordings = (recordings: Recording[]) => {
 interface EEGState {
   eegData: EEGData | null;
   selectedChannel: string;
+  liveChannel: string;
   bandPower: BandPower | null;
   isStreaming: boolean;
   brainState: BrainState | null;
@@ -52,6 +54,7 @@ interface EEGState {
 export const useEEGStore = create<EEGState>((set, get) => ({
   eegData: null,
   selectedChannel: 'Fp1',
+  liveChannel: 'Fp1',
   bandPower: null,
   isStreaming: false,
   brainState: null,
@@ -68,13 +71,33 @@ export const useEEGStore = create<EEGState>((set, get) => ({
     currentFrame: null,
   },
   setEEGData: (d) => set({ eegData: d }),
-  setChannel: (c) => set({ selectedChannel: c }),
+  setChannel: (c) => {
+    const { playbackMode, activeRecording, playbackState } = get();
+    if (playbackMode && activeRecording) {
+      // 通道切换与时间跳转走同一条时间线：按当前时间重新派生新通道的视图，
+      // 新通道在该帧无数据时清空评分，绝不沿用旧通道结果。
+      const frame = resolveFrameAt(activeRecording.frames, playbackState.currentTime);
+      const view = deriveView(frame, c);
+      set({
+        selectedChannel: c,
+        playbackState: {
+          ...playbackState,
+          currentFrame: frame,
+        },
+        eegData: view ? view.eeg : null,
+        bandPower: view ? view.bands : null,
+        brainState: view ? view.brainState : null,
+        correlationData: view ? view.correlation : null,
+      });
+      return;
+    }
+    set({ selectedChannel: c });
+  },
   setBandPower: (b) => set({ bandPower: b }),
   setStreaming: (v) => set({ isStreaming: v }),
   setBrainState: (s) => set({ brainState: s }),
   setCorrelationData: (c) => set({ correlationData: c }),
   startRecording: () => {
-    const { selectedChannel } = get();
     set({
       isRecording: true,
       recordingStartTime: Date.now(),
@@ -119,67 +142,101 @@ export const useEEGStore = create<EEGState>((set, get) => ({
   deleteRecording: (id) => {
     const recordings = get().recordings.filter(r => r.id !== id);
     saveRecordings(recordings);
-    const { activeRecording } = get();
+    const { activeRecording, liveChannel } = get();
     if (activeRecording?.id === id) {
-      set({ recordings, playbackMode: false, activeRecording: null });
+      // 删除的正是当前回放：彻底回到实时页并恢复进入回放前的关注通道。
+      // recordings 已先落盘，其它已有录制不受影响。
+      set({
+        recordings,
+        playbackMode: false,
+        activeRecording: null,
+        playbackState: { isPlaying: false, currentTime: 0, currentFrame: null },
+        selectedChannel: liveChannel,
+        eegData: null,
+        bandPower: null,
+        brainState: null,
+        correlationData: null,
+      });
     } else {
       set({ recordings });
     }
   },
   enterPlaybackMode: (recording) => {
     if (recording.frames.length === 0) return;
+    const { selectedChannel, playbackMode } = get();
+    // 记录实时页当前关注通道，退出回放时恢复；从实时页首次进入时保存，
+    // 在回放中切换到另一条录制则沿用已有快照。
+    const liveChannel = playbackMode ? get().liveChannel : selectedChannel;
+    const channel = recording.channel;
+    const firstFrame = recording.frames[0];
+    // 时间线起点对齐第一帧，暂停 / 播放 / 跳转都以同一时间为准
+    const startTime = firstFrame.relativeTime;
+    const view = deriveView(firstFrame, channel);
     set({
       playbackMode: true,
       activeRecording: recording,
+      liveChannel,
+      selectedChannel: channel,
       playbackState: {
         isPlaying: false,
-        currentTime: 0,
-        currentFrame: recording.frames[0],
+        currentTime: startTime,
+        currentFrame: firstFrame,
       },
-      eegData: recording.frames[0].eeg,
-      bandPower: recording.frames[0].bands,
-      brainState: recording.frames[0].brainState,
-      correlationData: recording.frames[0].correlation,
+      eegData: view ? view.eeg : null,
+      bandPower: view ? view.bands : null,
+      brainState: view ? view.brainState : null,
+      correlationData: view ? view.correlation : null,
     });
   },
   exitPlaybackMode: () => {
+    const { liveChannel } = get();
+    // 回到实时页：清理全部回放临时视图与播放状态，恢复进入前的关注通道。
+    // 不清空 recordings，已有录制保留。
     set({
       playbackMode: false,
       activeRecording: null,
+      selectedChannel: liveChannel,
       playbackState: {
         isPlaying: false,
         currentTime: 0,
         currentFrame: null,
       },
+      eegData: null,
+      bandPower: null,
+      brainState: null,
+      correlationData: null,
     });
   },
   setPlaybackTime: (time) => {
-    const { activeRecording } = get();
+    const { activeRecording, selectedChannel, playbackState } = get();
     if (!activeRecording || activeRecording.frames.length === 0) return;
-    const frames = activeRecording.frames;
-    let frameIndex = 0;
-    for (let i = 0; i < frames.length; i++) {
-      if (frames[i].relativeTime <= time) {
-        frameIndex = i;
-      } else {
-        break;
-      }
-    }
-    const frame = frames[frameIndex];
+    const clamped = Math.max(0, Math.min(activeRecording.duration, time));
+    const frame = resolveFrameAt(activeRecording.frames, clamped);
+    const view = deriveView(frame, selectedChannel);
+    // 通道变更、播放推进、连续跳转共用此路径；无帧时视图字段全部置空
     set({
       playbackState: {
-        ...get().playbackState,
-        currentTime: time,
+        ...playbackState,
+        currentTime: clamped,
         currentFrame: frame,
       },
-      eegData: frame.eeg,
-      bandPower: frame.bands,
-      brainState: frame.brainState,
-      correlationData: frame.correlation,
+      eegData: view ? view.eeg : null,
+      bandPower: view ? view.bands : null,
+      brainState: view ? view.brainState : null,
+      correlationData: view ? view.correlation : null,
     });
   },
   togglePlayback: () => {
-    const { playbackState } = get();
+    const { playbackState, activeRecording } = get();
+    if (!playbackState.isPlaying && activeRecording && playbackState.currentTime >= activeRecording.duration) {
+      // 已播放到末尾再按播放：从第一帧重新开始
+      const firstTime = activeRecording.frames[0]?.relativeTime ?? 0;
+      get().setPlaybackTime(firstTime);
+      set({ playbackState: { ...get().playbackState, isPlaying: true } });
+      return;
+    }
+    // 只切换播放标志，不改动 currentTime / 当前帧，
+    // 因此暂停后恢复一定从暂停时的帧继续
     set({
       playbackState: {
         ...playbackState,

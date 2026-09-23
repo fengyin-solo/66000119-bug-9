@@ -21,7 +21,9 @@ export const CorrelationChart: React.FC = () => {
           <span style={{ fontSize: '13px', color: '#666', fontWeight: 400 }}>{channelName} · 通道相关分析</span>
           {playbackMode && <span style={{ fontSize: '12px', color: '#1565c0', fontWeight: 500 }}>⏮ 回放中</span>}
         </h3>
-        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>等待数据中...</div>
+        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>
+          {playbackMode ? `当前时间点 ${selectedChannel} 通道无帧，相关分析已清空` : '等待数据中...'}
+        </div>
       </div>
     );
   }
