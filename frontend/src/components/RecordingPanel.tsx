@@ -40,6 +40,9 @@ export const RecordingPanel: React.FC = () => {
     togglePlayback,
     setPlaybackPlaying,
     selectedChannel,
+    brainState,
+    bandPower,
+    correlationData,
   } = useEEGStore();
 
   const [recordingName, setRecordingName] = useState('');
@@ -67,15 +70,20 @@ export const RecordingPanel: React.FC = () => {
 
   useEffect(() => {
     if (playbackState.isPlaying && activeRecording) {
+      // 以真实时间差推进，暂停后继续仍停在正确时间点，连续跳转也走同一 setPlaybackTime
+      let lastTick = performance.now();
       playbackTimerRef.current = window.setInterval(() => {
-        const { playbackState, activeRecording, setPlaybackTime, setPlaybackPlaying } = useEEGStore.getState();
-        if (!activeRecording) return;
-        const newTime = playbackState.currentTime + 0.1;
-        if (newTime >= activeRecording.duration) {
-          setPlaybackTime(activeRecording.duration);
-          setPlaybackPlaying(false);
+        const state = useEEGStore.getState();
+        if (!state.activeRecording) return;
+        const now = performance.now();
+        const delta = (now - lastTick) / 1000;
+        lastTick = now;
+        const newTime = state.playbackState.currentTime + delta;
+        if (newTime >= state.activeRecording.duration) {
+          state.setPlaybackTime(state.activeRecording.duration);
+          state.setPlaybackPlaying(false);
         } else {
-          setPlaybackTime(newTime);
+          state.setPlaybackTime(newTime);
         }
       }, 100);
     } else {
@@ -231,6 +239,11 @@ export const RecordingPanel: React.FC = () => {
               </div>
               <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>
                 {CHANNEL_NAMES[activeRecording.channel] || activeRecording.channel} · {formatDuration(activeRecording.duration)}
+                {selectedChannel !== activeRecording.channel && (
+                  <span style={{ color: '#9c27b0', marginLeft: '6px' }}>
+                    · 当前 {selectedChannel} 评分由该帧波形重算
+                  </span>
+                )}
               </div>
             </div>
             <button
@@ -320,7 +333,7 @@ export const RecordingPanel: React.FC = () => {
             </span>
           </div>
 
-          {playbackState.currentFrame && (
+          {playbackState.currentFrame ? (
             <div>
               <div style={{
                 display: 'flex',
@@ -331,32 +344,48 @@ export const RecordingPanel: React.FC = () => {
                 borderRadius: '6px',
                 marginBottom: '6px',
               }}>
-                <span style={{ fontSize: '11px', color: '#1976d2' }}>专注: {playbackState.currentFrame.brainState.focus.toFixed(0)}</span>
-                <span style={{ fontSize: '11px', color: '#388e3c' }}>放松: {playbackState.currentFrame.brainState.relaxation.toFixed(0)}</span>
-                <span style={{ fontSize: '11px', color: '#d32f2f' }}>疲劳: {playbackState.currentFrame.brainState.fatigue.toFixed(0)}</span>
-                <span style={{ fontSize: '11px', color: '#666' }}>|</span>
-                <span style={{ fontSize: '11px', color: '#1565c0' }}>α: {playbackState.currentFrame.bands.alpha.toFixed(2)}</span>
-                <span style={{ fontSize: '11px', color: '#e53935' }}>β: {playbackState.currentFrame.bands.beta.toFixed(2)}</span>
-                <span style={{ fontSize: '11px', color: '#2e7d32' }}>θ: {playbackState.currentFrame.bands.theta.toFixed(2)}</span>
+                {brainState ? (
+                  <>
+                    <span style={{ fontSize: '11px', color: '#1976d2' }}>专注: {brainState.focus.toFixed(0)}</span>
+                    <span style={{ fontSize: '11px', color: '#388e3c' }}>放松: {brainState.relaxation.toFixed(0)}</span>
+                    <span style={{ fontSize: '11px', color: '#d32f2f' }}>疲劳: {brainState.fatigue.toFixed(0)}</span>
+                  </>
+                ) : (
+                  <span style={{ fontSize: '11px', color: '#999' }}>{selectedChannel} 通道暂无评分</span>
+                )}
+                {bandPower && (
+                  <>
+                    <span style={{ fontSize: '11px', color: '#666' }}>|</span>
+                    <span style={{ fontSize: '11px', color: '#1565c0' }}>α: {bandPower.alpha.toFixed(2)}</span>
+                    <span style={{ fontSize: '11px', color: '#e53935' }}>β: {bandPower.beta.toFixed(2)}</span>
+                    <span style={{ fontSize: '11px', color: '#2e7d32' }}>θ: {bandPower.theta.toFixed(2)}</span>
+                  </>
+                )}
               </div>
-              <div style={{
-                display: 'flex',
-                gap: '8px',
-                flexWrap: 'wrap',
-                padding: '8px',
-                background: 'rgba(255,255,255,0.5)',
-                borderRadius: '6px',
-              }}>
-                <span style={{ fontSize: '11px', color: '#666', fontWeight: 500 }}>相关度:</span>
-                {playbackState.currentFrame?.correlation.correlations
-                  .filter(c => c.channel !== playbackState.currentFrame?.correlation.targetChannel)
-                  .slice(0, 3)
-                  .map((c, i) => (
-                    <span key={i} style={{ fontSize: '11px', color: '#6a1b9a' }}>
-                      {c.channel}: {(Math.abs(c.correlation) * 100).toFixed(0)}%
-                    </span>
-                  ))}
-              </div>
+              {correlationData && (
+                <div style={{
+                  display: 'flex',
+                  gap: '8px',
+                  flexWrap: 'wrap',
+                  padding: '8px',
+                  background: 'rgba(255,255,255,0.5)',
+                  borderRadius: '6px',
+                }}>
+                  <span style={{ fontSize: '11px', color: '#666', fontWeight: 500 }}>相关度:</span>
+                  {correlationData.correlations
+                    .filter(c => c.channel !== selectedChannel)
+                    .slice(0, 3)
+                    .map((c, i) => (
+                      <span key={i} style={{ fontSize: '11px', color: '#6a1b9a' }}>
+                        {c.channel}: {(Math.abs(c.correlation) * 100).toFixed(0)}%
+                      </span>
+                    ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ padding: '8px', background: 'rgba(255,255,255,0.5)', borderRadius: '6px', fontSize: '11px', color: '#999' }}>
+              该时间点暂无帧数据，未沿用旧通道评分
             </div>
           )}
         </div>

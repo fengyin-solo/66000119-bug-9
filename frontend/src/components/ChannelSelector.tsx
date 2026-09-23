@@ -9,7 +9,7 @@ const CHANNEL_NAMES: Record<string, string> = {
 };
 
 export const ChannelSelector: React.FC = () => {
-  const { selectedChannel, setChannel } = useEEGStore();
+  const { selectedChannel, setChannel, playbackMode, activeRecording } = useEEGStore();
 
   return (
     <div style={{ padding: '16px' }}>
@@ -18,6 +18,13 @@ export const ChannelSelector: React.FC = () => {
         <div style={{ fontSize: '11px', color: '#90caf9', marginBottom: '4px' }}>当前关注</div>
         <div style={{ fontSize: '24px', fontWeight: 800, color: '#fff', letterSpacing: '1px' }}>{selectedChannel}</div>
         <div style={{ fontSize: '12px', color: '#90caf9', marginTop: '2px' }}>{CHANNEL_NAMES[selectedChannel]}</div>
+        {playbackMode && activeRecording && (
+          <div style={{ fontSize: '11px', color: selectedChannel === activeRecording.channel ? '#ffd54f' : '#ce93d8', marginTop: '4px' }}>
+            {selectedChannel === activeRecording.channel
+              ? `📼 录制通道 · 切换通道将按该时间线重算`
+              : `录制通道为 ${activeRecording.channel}，当前为波形重算结果`}
+          </div>
+        )}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
         {CHANNELS.map(ch => (

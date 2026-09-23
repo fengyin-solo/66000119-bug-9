@@ -49,7 +49,13 @@ export const BrainStateDashboard: React.FC = () => {
           {playbackMode ? '回放脑状态' : '实时脑状态'}
           {playbackMode && <span style={{ fontSize: '12px', color: '#1565c0', fontWeight: 500 }}>⏮ 回放中</span>}
         </h3>
-        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>等待数据中...</div>
+        <div style={{ color: '#999', padding: '40px 0', textAlign: 'center' }}>
+          {playbackMode
+            ? (activeRecording && selectedChannel !== activeRecording.channel
+              ? `${selectedChannel} 在当前帧无评分数据`
+              : '当前时间点暂无帧数据，未沿用旧评分')
+            : '等待数据中...'}
+        </div>
       </div>
     );
   }
